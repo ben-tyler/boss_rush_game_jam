@@ -45,8 +45,9 @@ init : () -> ( Model, Cmd Msg )
 init _ =
   ( { keys = noKeys
     , player = initPlayer
-    , floor = initfloor
     , camera = Camera 0 0 
+    , floor = initfloor
+    , boss = initBoss
     }
   , Cmd.batch
       [ 
@@ -58,6 +59,7 @@ type alias Model =
   , player : Player
   , camera : Camera
   , floor : List Floor
+  , boss : Boss
   }
 
 type alias Keys =
@@ -68,9 +70,20 @@ type alias Keys =
   , space : Bool
   }
 
+
+
 type Direction = Left | Right
 
 type alias Player =
+  { x   : Float
+  , y   : Float
+  , vx  : Float
+  , vy  : Float
+  , dir : Direction
+  , standingOn : Maybe Floor
+  }
+
+type alias Boss = 
   { x   : Float
   , y   : Float
   , vx  : Float
@@ -91,7 +104,6 @@ type alias Floor =
   }
 
 type Collided = RightCollide CollisionData | LeftCollide CollisionData | TopCollide CollisionData | BottomCollide CollisionData
-
 
 type alias CollisionData = 
   { x : Float
@@ -118,25 +130,26 @@ checkCollisions model nodesToCheck =
             TopCollide item
         else
             BottomCollide item
-    )
+      )
     
 
-jump : Keys -> Player -> Player
+
+--jump : Keys -> Player -> Player
 jump keys player =
     if keys.up && player.vy == 0 then { player | vy = 2 } else player
 
-gravity : Float -> Float ->  Player -> Player
+--gravity : Float -> Float ->  Player -> Player
 gravity dt floor player  =
     { player | vy = if player.y < floor then player.vy - dt/force else 0 }
 
-physics : Float -> Float -> Player  -> Player
+--physics : Float -> Float -> Player  -> Player
 physics dt floor player  =
     { player |
         x = player.x + dt * player.vx,
         y = min floor (player.y - dt * player.vy)
     }
 
-walk : Keys -> Player -> Player
+--walk : Keys -> Player -> Player
 walk keys player =
   let {left, right} = keys in
   { player 
@@ -152,6 +165,17 @@ initPlayer =
     , dir = Right
     , standingOn = Nothing
     }
+
+initBoss : Boss
+initBoss =     
+    { x = 200
+    , y = 0
+    , vx = 0
+    , vy = 0
+    , dir = Right
+    , standingOn = Nothing
+    }
+
 
 noKeys : Keys
 noKeys =
@@ -207,6 +231,21 @@ step dt model player =
         |> physics dt floor
         |> standingOn model.floor
 
+
+stepBoss : Float -> Model  -> Boss -> Boss
+stepBoss dt model player =
+  let
+    floor = case player.standingOn of 
+      Just c -> c.y 
+      Nothing -> 99999
+  in
+    player
+        |> gravity dt floor
+        |> jump model.keys
+        |> walk model.keys
+        |> physics dt floor
+        |> standingOn model.floor
+
 update : Msg -> Model -> Model
 update msg model =
   case msg of
@@ -217,9 +256,11 @@ update msg model =
     TimeDelta dt ->
       let
         player = step dt model model.player 
+        boss = stepBoss dt model model.boss 
       in
       { model 
         | player = player
+        , boss = boss
         , camera = if player.x > 200 then Camera (player.x  - 200 ) model.camera.y else model.camera
 
       }
@@ -233,15 +274,22 @@ update msg model =
 
 view : Model -> Html Msg
 view model =
-    main_ [ Attr.style "position" "relative"
-            , Attr.style "overflow" "hidden"
-            , Attr.style "height" "400px"
-            , Attr.style "width" "600px"]
-        [ div []
-          [ viewPlayer model.player model.camera
-          , div [] <| List.map (viewFloor model.camera) model.floor 
-          ]
-        ]
+    main_ 
+      [ Attr.style "position" "relative"
+      , Attr.style "overflow" "hidden"
+      , Attr.style "height" "400px"
+      , Attr.style "width" "600px"]
+      [ viewPlayer model.player model.camera
+      , viewBoss model.boss model.camera
+      , div [] <| List.map (viewFloor model.camera) model.floor 
+      ]
+
+position : Float -> Float -> List (Html.Attribute Msg)
+position x y = 
+  [ Attr.style "position" "absolute"
+  , Attr.style "top" <| (String.fromInt <| round y) ++ "px"
+  , Attr.style "left" <| (String.fromInt <| round x) ++ "px"
+  ] 
 
 viewPlayer : Player -> Camera -> Html Msg
 viewPlayer player camera = 
@@ -249,12 +297,21 @@ viewPlayer player camera =
     {x, y} = { x = player.x - camera.x, y = player.y - camera.y }
   in
   div 
-    [ Attr.style "position" "absolute"
-    , Attr.style "top" <| (String.fromInt <| round y) ++ "px"
-    , Attr.style "left" <| (String.fromInt <| round x) ++ "px"
-    ] 
+    (position x y)
     [ div [Attr.class "h-10 w-10 bg-blue-500 rounded-full absolute top-[-40px]"] []
     , div [Attr.class "h-10 w-5 bg-blue-500 transform -skew-x-12 animate-spin"] []
+    ]
+
+
+viewBoss : Boss -> Camera -> Html Msg
+viewBoss bos camera = 
+  let
+    {x, y} = { x = bos.x - camera.x, y = bos.y - camera.y }
+  in
+  div 
+    (position x y)
+    [ div [Attr.class "h-10 w-10 bg-red-500 rounded-full absolute top-[-40px]"] []
+    , div [Attr.class "h-10 w-5 bg-red-500 transform -skew-x-12 animate-spin"] []
     ]
 
 
@@ -264,15 +321,13 @@ viewFloor camera floor  =
     {x, y} = { x = floor.x - camera.x, y = floor.y + 40 - camera.y }
   in
   div 
-    [ Attr.style "position" "absolute"
-    , Attr.style "top" <| (String.fromInt <| round y) ++ "px"
-    , Attr.style "left" <| (String.fromInt <| round x) ++ "px"
-    ] 
+    (position x y)
     [ div 
       [ Attr.style "height" "20px"
       , Attr.style "width" ((floor.width |> round |> String.fromInt) ++  "px")
       , Attr.style "background-color" "grey"
-      ] []
+      ] 
+      []
     ]
 
-
+ 
