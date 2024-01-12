@@ -10,14 +10,10 @@ import String exposing (fromInt)
 import String exposing (left)
 import String exposing (right)
 import Dict exposing (keys)
+import Browser.Navigation exposing (Key)
 
 -- Pick Up Items to fight with, you hit the exchange button to swap items
 
---"They made a calf in Horeb, and worshiped a molten image."
-
-
-
---"Thus they exchanged their glory for an image of a bull that eats grass."
 type Screen = Menu Float | Game
 
 main : Program () Model Msg
@@ -90,7 +86,7 @@ type alias Keys =
 type Direction = Left | Right
 
 type alias SwordData = 
-  { strength : Int
+  { strength : Float
   , speed : Int
   }
 
@@ -104,6 +100,8 @@ type Weapon =
 
 type WeaponControl = Holding Weapon CoolDown| Attacking Weapon AnimationTime
 
+type Ailment = Good | Hit
+
 type alias Player =
   { x   : Float
   , y   : Float
@@ -112,6 +110,7 @@ type alias Player =
   , dir : Direction
   , standingOn : Maybe Floor
   , weaponControl : WeaponControl
+  , ailment : Ailment
   }
 
 type alias Boss = 
@@ -122,6 +121,7 @@ type alias Boss =
   , dir : Direction
   , standingOn : Maybe Floor
   , moveTo : Maybe (Float, Float)
+  , ailment : Ailment
   }
 
 type alias Camera = 
@@ -145,8 +145,8 @@ type alias CollisionData =
   }
 
 checkCollisions : CollisionData -> List CollisionData -> List Collided
-checkCollisions model nodesToCheck =
-  let {x, y, w, h } = model in
+checkCollisions collisionData nodesToCheck =
+  let {x, y, w, h } = collisionData in
   nodesToCheck 
     |> List.filter (\data ->
         let {bx, by, bw, bh} = { bx = data.x, by = data.y, bw = data.w, bh = data.h} in 
@@ -172,7 +172,25 @@ jump keys player =
 
 --gravity : Float -> Float ->  Player -> Player
 gravity dt floor player  =
-    { player | vy = if player.y < floor then player.vy - dt/force else 0 }
+    { player 
+      | vy = if player.y < floor then player.vy - dt/force else 0 
+      , vx = 
+        case player.ailment of 
+          Good -> 
+            player.vx
+          Hit -> 
+            if player.vx > 0 && player.vx - dt/force <= 0 then 0
+            else if player.vx < 0 && player.vx - dt/force >= 0 then 0
+            else if player.vx > 0 then player.vx - dt/force 
+            else if player.vx < 0 then player.vx + dt/force 
+            else 0
+
+      , ailment = 
+        case player.ailment of
+              Good -> Good
+              Hit -> if player.vx == 0 then Good else Hit 
+      
+    }
 
 --physics : Float -> Float -> Player  -> Player
 physics dt floor player  =
@@ -197,7 +215,8 @@ initPlayer =
     , vy = 0
     , dir = Right
     , standingOn = Nothing
-    , weaponControl = Holding (Sword {strength = 5, speed = 10}) (CoolDown 0)
+    , weaponControl = Holding (Sword {strength = 1, speed = 10}) (CoolDown 0)
+    , ailment = Good
     }
 
 initBoss : Boss
@@ -209,6 +228,7 @@ initBoss =
     , dir = Right
     , standingOn = Nothing
     , moveTo = Just (10, 0)
+    , ailment = Good
     }
 
 
@@ -287,7 +307,7 @@ step dt model player =
         |> standingOn model.floor
         |> attack model.keys
 
-
+keysleft : Keys
 keysleft = { up  = False
        , left  = True
        , down  = False
@@ -295,12 +315,14 @@ keysleft = { up  = False
        , space = False
        }
 
+keysright : Keys
 keysright = { up  = False
        , left  = False
        , down  = False
        , right  = True
        , space = False
        }
+
 bossAI : Model -> Boss -> Boss
 bossAI model boss = 
   case (model.player.standingOn, boss.standingOn) of
@@ -337,10 +359,65 @@ stepBoss dt model boss =
     boss
         |> gravity dt floor
         |> jump keys
-        |> walk keys 4
+        |> (\ p -> 
+            case p.ailment of 
+              Good -> walk keys 4 p
+              Hit -> p
+          )
         |> physics dt floor
         |> standingOn model.floor
         |> bossAI model
+ 
+checkAttacks : Player -> Boss -> (Player, Boss)
+checkAttacks player boss = 
+  case player.weaponControl of 
+    Attacking (Sword data) _ ->
+      let 
+        collides = 
+          checkCollisions 
+            (case player.dir of 
+              Left -> 
+                { x = player.x - 10
+                , y  = player.y
+                , w  = 50
+                , h = 50
+                }
+              Right -> 
+                { x = player.x 
+                , y  = player.y
+                , w  = 50
+                , h = 50
+                }
+            )
+            [ { x = boss.x
+              , y  = boss.y
+              , w  = 50
+              , h = 50
+              }
+            ]
+
+
+        hurtBoss = 
+            case collides of 
+              LeftCollide _::_ -> 
+                { boss 
+                  | vx = data.strength
+                  , ailment = Hit
+                  }
+
+              RightCollide _::_ -> 
+                { boss 
+                  | vx = data.strength * -1
+                  , ailment = Hit
+                }
+
+              _ -> 
+                boss
+      in
+      (player, hurtBoss)
+
+    _ -> 
+      (player, boss)
 
 update : Msg -> Model -> Model
 update msg model =
@@ -367,8 +444,10 @@ update msg model =
 
         Game -> 
           let
-            player =  step dt model model.player 
-            boss = stepBoss dt model model.boss 
+            playerStep =  step dt model model.player 
+            bossStep = stepBoss dt model model.boss 
+
+            (player, boss) = checkAttacks playerStep bossStep
           in
           { model 
             | player = player
