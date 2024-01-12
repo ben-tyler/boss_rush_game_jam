@@ -7,6 +7,17 @@ import Html.Attributes as Attr
 import Html.Events exposing (onClick)
 import Json.Decode as D
 import String exposing (fromInt)
+import String exposing (left)
+import String exposing (right)
+
+-- Pick Up Items to fight with, you hit the exchange button to swap items
+
+--"They made a calf in Horeb, and worshiped a molten image."
+
+
+
+--"Thus they exchanged their glory for an image of a bull that eats grass."
+type Screen = Menu Float | Game
 
 main : Program () Model Msg
 main =
@@ -27,7 +38,7 @@ subscriptions model =
     ]
 
 initfloor = 
-  [ { x = 50, y = 350, width = 600}
+  [ { x = 50, y = 350, width = 700}
   , { x = 850, y = 350, width = 600}
   , { x = 1400, y = 250, width = 600}
   , { x = 2000, y = 350, width = 600}
@@ -38,7 +49,7 @@ initfloor =
 
 
 
-speed = 2
+
 force = 100
 
 init : () -> ( Model, Cmd Msg )
@@ -48,6 +59,7 @@ init _ =
     , camera = Camera 0 0 
     , floor = initfloor
     , boss = initBoss
+    , screen = Game --Menu -1
     }
   , Cmd.batch
       [ 
@@ -60,7 +72,9 @@ type alias Model =
   , camera : Camera
   , floor : List Floor
   , boss : Boss
+  , screen : Screen
   }
+
 
 type alias Keys =
   { up : Bool
@@ -90,6 +104,7 @@ type alias Boss =
   , vy  : Float
   , dir : Direction
   , standingOn : Maybe Floor
+  , moveTo : Maybe (Float, Float)
   }
 
 type alias Camera = 
@@ -150,7 +165,7 @@ physics dt floor player  =
     }
 
 --walk : Keys -> Player -> Player
-walk keys player =
+walk keys speed player  =
   let {left, right} = keys in
   { player 
     | vx = if keys.left then -1/speed else if keys.right then 1/speed else 0
@@ -174,6 +189,7 @@ initBoss =
     , vy = 0
     , dir = Right
     , standingOn = Nothing
+    , moveTo = Just (10, 0)
     }
 
 
@@ -198,7 +214,7 @@ updateKeys isDown key keys =
     "ArrowRight" -> { keys | right = isDown }
     _            -> keys
 
-standingOn : List Floor -> Player ->  Player
+
 standingOn  floor player = 
   checkCollisions 
     {x = player.x, y = player.y, w = 50, h = 50}
@@ -227,43 +243,99 @@ step dt model player =
     player
         |> gravity dt floor
         |> jump model.keys
-        |> walk model.keys
+        |> walk model.keys 2
         |> physics dt floor
         |> standingOn model.floor
 
+
+keysleft = { up  = False
+       , left  = True
+       , down  = False
+       , right  = False
+       , space = False
+       }
+
+keysright = { up  = False
+       , left  = False
+       , down  = False
+       , right  = True
+       , space = False
+       }
+bossAI : Model -> Boss -> Boss
+bossAI model boss = 
+  case (model.player.standingOn, boss.standingOn) of
+    (Just a, Just b) -> 
+      if  a == b then 
+        { boss | moveTo = Just (model.player.x, boss.y) }
+      else 
+        boss
+
+    _ -> 
+      boss
 
 stepBoss : Float -> Model  -> Boss -> Boss
-stepBoss dt model player =
+stepBoss dt model boss =
   let
-    floor = case player.standingOn of 
+    floor = case boss.standingOn of 
       Just c -> c.y 
       Nothing -> 99999
+
+    keys = 
+      case boss.moveTo of 
+        Just (x, y) -> 
+          if boss.x > x then 
+            keysleft
+          else if boss.x < x then 
+            keysright
+          else
+            noKeys
+
+        Nothing -> 
+          noKeys
+            
   in
-    player
+    boss
         |> gravity dt floor
-        |> jump model.keys
-        |> walk model.keys
+        |> jump keys
+        |> walk keys 4
         |> physics dt floor
         |> standingOn model.floor
+        |> bossAI model
 
 update : Msg -> Model -> Model
 update msg model =
   case msg of
 
     KeyChanged isDown key ->
-      { model | keys = updateKeys isDown key model.keys }
+      case model.screen of 
+        Menu i ->
+          { model | screen = Menu 1 }
+            
+        Game -> 
+          { model | keys = updateKeys isDown key model.keys }
 
     TimeDelta dt ->
-      let
-        player = step dt model model.player 
-        boss = stepBoss dt model model.boss 
-      in
-      { model 
-        | player = player
-        , boss = boss
-        , camera = if player.x > 200 then Camera (player.x  - 200 ) model.camera.y else model.camera
+      case model.screen of 
+        Menu i -> 
+          {model | 
+            screen = 
+              if i > 100 then Game 
+              else if i /= -1 then Menu (i + 0.4) 
+              else Menu -1 
 
-      }
+          }
+
+        Game -> 
+          let
+            player =  step dt model model.player 
+            boss = stepBoss dt model model.boss 
+          in
+          { model 
+            | player = player
+            , boss = boss
+            , camera = if player.x > 200 then Camera (player.x  - 200 ) model.camera.y else model.camera
+          }
+          
 
     Resized width height ->
         model
@@ -272,6 +344,8 @@ update msg model =
       { model | keys = noKeys }
 
 
+-- I have taken this time, the exchange is complete.
+
 view : Model -> Html Msg
 view model =
     main_ 
@@ -279,10 +353,20 @@ view model =
       , Attr.style "overflow" "hidden"
       , Attr.style "height" "400px"
       , Attr.style "width" "600px"]
-      [ viewPlayer model.player model.camera
-      , viewBoss model.boss model.camera
-      , div [] <| List.map (viewFloor model.camera) model.floor 
-      ]
+      (case model.screen of 
+        Menu i -> 
+          [ Html.p [Attr.class "p-2 w-48"] [text "They made a calf in Horeb, and worshiped a molten image."]
+          , Html.p [Attr.class "p-2 w-48"] [text "Thus they exchanged their glory for an image of a bull that eats grass."]
+          , viewPlayer initPlayer (Camera -180 -350)
+          , viewHead 200 (50 +  i) 100
+          , Html.p [Attr.class "p-8"] [text "press any key to start..."]
+          ]
+        Game -> 
+          [ viewPlayer model.player model.camera
+          , viewBoss model.boss model.camera
+          , div [] <| List.map (viewFloor model.camera) model.floor 
+          ]
+      )
 
 position : Float -> Float -> List (Html.Attribute Msg)
 position x y = 
@@ -299,7 +383,18 @@ viewPlayer player camera =
   div 
     (position x y)
     [ div [Attr.class "h-10 w-10 bg-blue-500 rounded-full absolute top-[-40px]"] []
-    , div [Attr.class "h-10 w-5 bg-blue-500 transform -skew-x-12 animate-spin"] []
+    , div [Attr.class "h-10 w-5 bg-blue-500 transform -skew-x-12 "] []
+    ]
+
+viewHead x y sizein  =
+  let (size, sizeBy) = (String.fromInt sizein, String.fromInt (sizein * 2)) in
+  div 
+    (position x y) 
+    [ div [Attr.class "animate-pulse"]
+      [ div [Attr.class <| "triangle transform rotate-45 absolute top-[50px]"] []
+      , div [Attr.class <| "triangle transform -rotate-45 absolute top-[50px] left-[50px]"] []
+      , div [Attr.class <| "pentagon absolute top-[100px]"] []
+      ]
     ]
 
 
