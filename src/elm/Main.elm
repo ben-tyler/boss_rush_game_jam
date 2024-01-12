@@ -9,6 +9,7 @@ import Json.Decode as D
 import String exposing (fromInt)
 import String exposing (left)
 import String exposing (right)
+import Dict exposing (keys)
 
 -- Pick Up Items to fight with, you hit the exchange button to swap items
 
@@ -88,6 +89,21 @@ type alias Keys =
 
 type Direction = Left | Right
 
+type alias SwordData = 
+  { strength : Int
+  , speed : Int
+  }
+
+type CoolDown = CoolDown Int
+type AnimationTime = AnimationTime Int
+
+
+
+type Weapon = 
+  Sword SwordData
+
+type WeaponControl = Holding Weapon CoolDown| Attacking Weapon AnimationTime
+
 type alias Player =
   { x   : Float
   , y   : Float
@@ -95,6 +111,7 @@ type alias Player =
   , vy  : Float
   , dir : Direction
   , standingOn : Maybe Floor
+  , weaponControl : WeaponControl
   }
 
 type alias Boss = 
@@ -172,6 +189,7 @@ walk keys speed player  =
     , dir = if left then Left else if right then Right else player.dir
   }
 
+initPlayer : Player
 initPlayer = 
     { x = 50
     , y = 0
@@ -179,6 +197,7 @@ initPlayer =
     , vy = 0
     , dir = Right
     , standingOn = Nothing
+    , weaponControl = Holding (Sword {strength = 5, speed = 10}) (CoolDown 0)
     }
 
 initBoss : Boss
@@ -233,6 +252,26 @@ standingOn  floor player =
       )
     |> ( \ g-> { player | standingOn = g } )
 
+attack : Keys -> Player -> Player
+attack keys player = 
+  case player.weaponControl of 
+    Holding (Sword data) (CoolDown 0) -> 
+      if keys.space then
+        { player | weaponControl = Attacking (Sword data) (AnimationTime <| data.speed) }
+      else 
+        player
+
+    Holding (Sword data) (CoolDown cd) -> 
+      { player | weaponControl = Holding (Sword data) (CoolDown <| cd - 1) }
+      
+
+    Attacking (Sword data) (AnimationTime t) ->
+      if t == 0 then 
+        { player | weaponControl = Holding (Sword data) (CoolDown <| data.speed) }
+      else 
+        { player | weaponControl = Attacking (Sword data) (AnimationTime <| t - 1) }
+
+
 step : Float -> Model  -> Player -> Player
 step dt model player =
   let
@@ -246,6 +285,7 @@ step dt model player =
         |> walk model.keys 2
         |> physics dt floor
         |> standingOn model.floor
+        |> attack model.keys
 
 
 keysleft = { up  = False
@@ -363,6 +403,10 @@ view model =
           ]
         Game -> 
           [ viewPlayer model.player model.camera
+          , case model.player.weaponControl of
+              Attacking (Sword _) (AnimationTime _) ->
+                viewSword model.player model.camera
+              _ -> div [] []
           , viewBoss model.boss model.camera
           , div [] <| List.map (viewFloor model.camera) model.floor 
           ]
@@ -374,6 +418,20 @@ position x y =
   , Attr.style "top" <| (String.fromInt <| round y) ++ "px"
   , Attr.style "left" <| (String.fromInt <| round x) ++ "px"
   ] 
+
+viewSword player camera = 
+  let
+    {x, y} = { x = player.x - camera.x, y = player.y - camera.y }
+    angle = case player.dir of 
+      Left -> "rotate-90 -mt-12 -ml-12"
+      Right -> "-rotate-90 -mt-12 ml-8"
+
+    
+  in
+  div 
+    (position (x) y)
+    [ div [Attr.class "animate-pulse"] [div [Attr.class <| "triangle transform " ++ angle] []]
+    ]
 
 viewPlayer : Player -> Camera -> Html Msg
 viewPlayer player camera = 
