@@ -42,6 +42,7 @@ initfloor =
   , { x = 2000, y = 50, width = 600}
   , { x = 2700, y = 350, width = 600}
   , { x = 3200, y = 350, width = 600}
+  , { x = -500, y = 350, width = 400}
   ]
 
 
@@ -88,6 +89,7 @@ type Direction = Left | Right
 type alias SwordData = 
   { strength : Float
   , speed : Int
+  , size : Float
   }
 
 type CoolDown = CoolDown Int
@@ -113,6 +115,12 @@ type alias Player =
   , ailment : Ailment
   }
 
+
+type Decision 
+  = MoveTo (Float, Float) 
+  | NoDecision
+  | JumpTo (Float, Float)
+
 type alias Boss = 
   { x   : Float
   , y   : Float
@@ -120,7 +128,7 @@ type alias Boss =
   , vy  : Float
   , dir : Direction
   , standingOn : Maybe Floor
-  , moveTo : Maybe (Float, Float)
+  , descision : Decision
   , ailment : Ailment
   }
 
@@ -215,7 +223,7 @@ initPlayer =
     , vy = 0
     , dir = Right
     , standingOn = Nothing
-    , weaponControl = Holding (Sword {strength = 1, speed = 10}) (CoolDown 0)
+    , weaponControl = Holding (Sword {strength = 1, speed = 10, size = 50}) (CoolDown 0)
     , ailment = Good
     }
 
@@ -227,7 +235,7 @@ initBoss =
     , vy = 0
     , dir = Right
     , standingOn = Nothing
-    , moveTo = Just (10, 0)
+    , descision = NoDecision
     , ailment = Good
     }
 
@@ -315,6 +323,14 @@ keysleft = { up  = False
        , space = False
        }
 
+keysUpleft : Keys
+keysUpleft = { up  = True
+       , left  = True
+       , down  = False
+       , right  = False
+       , space = False
+       }
+
 keysright : Keys
 keysright = { up  = False
        , left  = False
@@ -323,17 +339,56 @@ keysright = { up  = False
        , space = False
        }
 
+keysUpRight : Keys
+keysUpRight = { up  = True
+       , left  = False
+       , down  = False
+       , right  = True
+       , space = False
+       }
+
+inRange i1 i2 =
+   i1 < i2 + 1 && i1 > i2 - 1
+
+
 bossAI : Model -> Boss -> Boss
 bossAI model boss = 
-  case (model.player.standingOn, boss.standingOn) of
-    (Just a, Just b) -> 
-      if  a == b then 
-        { boss | moveTo = Just (model.player.x, boss.y) }
-      else 
-        boss
+  let
+  
+    nextDecision = 
+      case boss.descision of 
+        NoDecision -> 
+          case (model.player.standingOn, boss.standingOn) of
+            (Just playerFloor, Just bossFloor) -> 
+              if  playerFloor == bossFloor then 
+                MoveTo (model.player.x, boss.y)
+              else if inRange bossFloor.x boss.x then 
+                JumpTo (playerFloor.width, boss.y - 300)
+              else if inRange boss.x bossFloor.width then 
+                JumpTo (playerFloor.x, boss.y - 300)
+              else if bossFloor.x > playerFloor.x then 
+                MoveTo (bossFloor.x, boss.y)
+              else 
+                MoveTo (bossFloor.width, boss.y)
 
-    _ -> 
-      boss
+            _ -> 
+              boss.descision
+      
+        JumpTo (x, y) -> 
+          if boss.x < x + 1 && boss.x > x - 1 then 
+            NoDecision
+          else 
+            boss.descision
+
+
+        MoveTo (x, y) -> 
+          if boss.x < x + 1 && boss.x > x - 1 then 
+            NoDecision
+          else 
+            boss.descision
+
+  in 
+  { boss | descision = nextDecision }
 
 stepBoss : Float -> Model  -> Boss -> Boss
 stepBoss dt model boss =
@@ -343,8 +398,8 @@ stepBoss dt model boss =
       Nothing -> 99999
 
     keys = 
-      case boss.moveTo of 
-        Just (x, y) -> 
+      case boss.descision of 
+        MoveTo (x, y) -> 
           if boss.x > x then 
             keysleft
           else if boss.x < x then 
@@ -352,7 +407,16 @@ stepBoss dt model boss =
           else
             noKeys
 
-        Nothing -> 
+        JumpTo (x, y) -> 
+          if boss.x > x then 
+            keysUpleft
+          else if boss.x < x then 
+            keysUpRight
+          else 
+            noKeys
+
+
+        _ -> 
           noKeys
             
   in
@@ -383,7 +447,7 @@ checkAttacks player boss =
                 , h = 50
                 }
               Right -> 
-                { x = player.x 
+                { x = player.x + 20
                 , y  = player.y
                 , w  = 50
                 , h = 50
@@ -452,7 +516,7 @@ update msg model =
           { model 
             | player = player
             , boss = boss
-            , camera = if player.x > 200 then Camera (player.x  - 200 ) model.camera.y else model.camera
+            , camera =  Camera (player.x  - 250) model.camera.y --if player.x > 200 then Camera (player.x  - 200 ) model.camera.y else model.camera
           }
           
 
@@ -483,8 +547,8 @@ view model =
         Game -> 
           [ viewPlayer model.player model.camera
           , case model.player.weaponControl of
-              Attacking (Sword _) (AnimationTime _) ->
-                viewSword model.player model.camera
+              Attacking (Sword sword) (AnimationTime _) ->
+                viewSword model.player model.camera sword
               _ -> div [] []
           , viewBoss model.boss model.camera
           , div [] <| List.map (viewFloor model.camera) model.floor 
@@ -498,19 +562,20 @@ position x y =
   , Attr.style "left" <| (String.fromInt <| round x) ++ "px"
   ] 
 
-viewSword player camera = 
-  let
-    {x, y} = { x = player.x - camera.x, y = player.y - camera.y }
-    angle = case player.dir of 
-      Left -> "rotate-90 -mt-12 -ml-12"
-      Right -> "-rotate-90 -mt-12 ml-8"
+viewSword player camera sword = 
+  case player.dir of 
+    Left -> let {x, y} = { x = player.x - sword.size - camera.x, y = player.y - camera.y } in 
+      div 
+        (position (x) y)
+        [ div [Attr.class "animate-pulse"] [div [Attr.class <| "triangle transform rotate-90 -mt-12 -ml-12"] []]
+        ]
 
-    
-  in
-  div 
-    (position (x) y)
-    [ div [Attr.class "animate-pulse"] [div [Attr.class <| "triangle transform " ++ angle] []]
-    ]
+
+    Right ->  let {x, y} = { x = player.x + sword.size - camera.x, y = player.y - camera.y } in 
+      div 
+        (position (x) y)
+        [ div [Attr.class "animate-pulse"] [div [Attr.class <| "triangle transform -rotate-90 -mt-12 ml-8"] []]
+        ]
 
 viewPlayer : Player -> Camera -> Html Msg
 viewPlayer player camera = 
